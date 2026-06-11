@@ -20,6 +20,13 @@ APP_NAME = "vietmed-funasr-labeling"
 DATA_DIR = Path("data")
 ERROR_LOG = DATA_DIR / "_asr_errors.jsonl"
 MODEL_ID = "FunAudioLLM/Fun-ASR-Nano-2512"
+ALLOWED_REMOTE_SUFFIXES = {".wav", ".mp3", ".flac", ".m4a", ".ogg"}
+
+
+def safe_audio_suffix(filename: str) -> str:
+    suffix = Path(filename).suffix.lower()
+    return suffix if suffix in ALLOWED_REMOTE_SUFFIXES else ".wav"
+
 
 image = (
     modal.Image.debian_slim(python_version="3.10")
@@ -56,9 +63,8 @@ class FunASRWorker:
     @modal.method()
     def transcribe(self, audio_bytes: bytes, filename: str) -> Any:
         import tempfile
-        from pathlib import Path
 
-        suffix = Path(filename).suffix or ".wav"
+        suffix = safe_audio_suffix(filename)
         with tempfile.NamedTemporaryFile(suffix=suffix) as tmp:
             tmp.write(audio_bytes)
             tmp.flush()

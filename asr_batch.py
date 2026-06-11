@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -82,7 +83,7 @@ def _is_timestamp_pair(value: Any) -> bool:
 
 def atomic_write_json(output_path: Path, payload: Any) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = output_path.with_suffix(output_path.suffix + ".tmp")
+    tmp_path = output_path.with_name(f"{output_path.name}.{uuid.uuid4().hex}.tmp")
     tmp_path.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2),
         encoding="utf-8",

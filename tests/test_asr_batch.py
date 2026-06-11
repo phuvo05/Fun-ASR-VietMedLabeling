@@ -113,7 +113,7 @@ def test_atomic_write_json_writes_final_file_without_tmp(tmp_path):
     atomic_write_json(output, payload)
 
     assert json.loads(output.read_text(encoding="utf-8")) == payload
-    assert not output.with_suffix(output.suffix + ".tmp").exists()
+    assert not list(tmp_path.glob("sample.wav.json.*.tmp"))
 
 
 def test_error_record_has_required_fields():
