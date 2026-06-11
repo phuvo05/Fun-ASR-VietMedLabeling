@@ -40,7 +40,7 @@ Output JSON format:
 ]
 ```
 
-If FunASR does not return word-level timestamps or confidence for a file, `timestamps` is an empty list. The script does not fabricate timestamps or confidence values.
+If FunASR does not return timestamp entries for a file, `timestamps` is an empty list. If FunASR returns timing entries without confidence, the script preserves the timing fields and does not fabricate confidence values.
 
 ## Setup
 
@@ -74,10 +74,16 @@ A file is skipped when its output JSON exists, parses correctly, has matching `i
 
 Invalid or partial output files are re-run.
 
-Failures are appended to:
+Failures are appended to `_asr_errors.jsonl` inside the selected data folder. With the default folder, that path is:
 
 ```text
 data/_asr_errors.jsonl
+```
+
+With `--data-dir "D:\path\to\audio_data"`, failures are written to:
+
+```text
+D:\path\to\audio_data\_asr_errors.jsonl
 ```
 
 The batch continues after individual file failures.
