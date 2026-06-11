@@ -62,9 +62,20 @@ def _first_result_item(raw_result: Any) -> dict[str, Any]:
 
 def _extract_timestamps(item: dict[str, Any]) -> list[dict[str, Any]]:
     timestamps = item.get("timestamps") or item.get("timestamp") or item.get("words")
-    if isinstance(timestamps, list):
-        return [dict(ts) for ts in timestamps if isinstance(ts, dict)]
-    return []
+    if not isinstance(timestamps, list):
+        return []
+
+    normalized = []
+    for timestamp in timestamps:
+        if isinstance(timestamp, dict):
+            normalized.append(dict(timestamp))
+        elif _is_timestamp_pair(timestamp):
+            normalized.append({"start": timestamp[0], "end": timestamp[1]})
+    return normalized
+
+
+def _is_timestamp_pair(value: Any) -> bool:
+    return isinstance(value, (list, tuple)) and len(value) >= 2
 
 
 def atomic_write_json(output_path: Path, payload: Any) -> None:

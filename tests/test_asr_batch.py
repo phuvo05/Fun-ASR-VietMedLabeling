@@ -89,6 +89,17 @@ def test_normalize_asr_result_accepts_funasr_list_result():
     ]
 
 
+def test_normalize_asr_result_preserves_timestamp_pairs_without_confidence():
+    raw = {"text": "xin chào", "timestamp": [[0, 500], [500, 900]]}
+
+    normalized = normalize_asr_result("sample.wav", raw)
+
+    assert normalized[0]["timestamps"] == [
+        {"start": 0, "end": 500},
+        {"start": 500, "end": 900},
+    ]
+
+
 def test_atomic_write_json_writes_final_file_without_tmp(tmp_path):
     output = tmp_path / "sample.wav.json"
     payload = [{"id": "sample.wav", "text": "xin chào", "timestamps": []}]
