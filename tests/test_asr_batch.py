@@ -89,6 +89,12 @@ def test_normalize_asr_result_accepts_funasr_list_result():
     ]
 
 
+def test_normalize_asr_result_empty_list_has_empty_text():
+    normalized = normalize_asr_result("sample.wav", [])
+
+    assert normalized == [{"id": "sample.wav", "text": "", "timestamps": []}]
+
+
 def test_normalize_asr_result_preserves_timestamp_pairs_without_confidence():
     raw = {"text": "xin chào", "timestamp": [[0, 500], [500, 900]]}
 

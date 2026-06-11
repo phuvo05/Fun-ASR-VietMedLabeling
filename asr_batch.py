@@ -52,7 +52,9 @@ def normalize_asr_result(audio_id: str, raw_result: Any) -> list[dict[str, Any]]
 
 
 def _first_result_item(raw_result: Any) -> dict[str, Any]:
-    if isinstance(raw_result, list) and raw_result:
+    if isinstance(raw_result, list):
+        if not raw_result:
+            return {"text": ""}
         first = raw_result[0]
         return first if isinstance(first, dict) else {"text": str(first)}
     if isinstance(raw_result, dict):

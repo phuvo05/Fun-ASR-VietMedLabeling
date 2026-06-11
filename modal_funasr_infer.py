@@ -80,6 +80,7 @@ def main(data_dir: str = str(DATA_DIR)) -> None:
         print(f"No audio files found in {root}. Add .wav files and run again.")
         return
 
+    error_log = root / "_asr_errors.jsonl"
     worker = FunASRWorker()
     skipped = 0
     succeeded = 0
@@ -105,7 +106,7 @@ def main(data_dir: str = str(DATA_DIR)) -> None:
         except Exception as exc:
             failed += 1
             append_jsonl(
-                ERROR_LOG,
+                error_log,
                 error_record(
                     audio_path,
                     f"{exc}\n{traceback.format_exc()}",
