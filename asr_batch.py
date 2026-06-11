@@ -63,17 +63,8 @@ def _first_result_item(raw_result: Any) -> dict[str, Any]:
 def _extract_timestamps(item: dict[str, Any]) -> list[dict[str, Any]]:
     timestamps = item.get("timestamps") or item.get("timestamp") or item.get("words")
     if isinstance(timestamps, list):
-        return [_normalize_timestamp(ts) for ts in timestamps if isinstance(ts, dict)]
+        return [dict(ts) for ts in timestamps if isinstance(ts, dict)]
     return []
-
-
-def _normalize_timestamp(ts: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "word": str(ts.get("word") or ts.get("text") or ""),
-        "confidence": ts.get("confidence"),
-        "start": ts.get("start"),
-        "end": ts.get("end"),
-    }
 
 
 def atomic_write_json(output_path: Path, payload: Any) -> None:
