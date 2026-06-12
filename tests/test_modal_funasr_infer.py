@@ -37,6 +37,34 @@ def test_confidence_wrapper_passes_configured_language():
     assert wrapper_calls[0].args[2].id == "LANGUAGE"
 
 
+def test_modal_image_includes_logits_helper_module():
+    image_assignments = [
+        node
+        for node in TREE.body
+        if isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+        and node.targets[0].id == "image"
+    ]
+    assert len(image_assignments) == 1
+
+    local_source_calls = [
+        node
+        for node in ast.walk(image_assignments[0].value)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "add_local_python_source"
+    ]
+
+    assert local_source_calls
+    assert any(
+        call.args
+        and isinstance(call.args[0], ast.Constant)
+        and call.args[0].value == "funasr_logits_infer"
+        for call in local_source_calls
+    )
+
+
 def test_worker_uses_logits_confidence_wrapper():
     transcribe_functions = [
         node
