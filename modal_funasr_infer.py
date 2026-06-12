@@ -32,6 +32,7 @@ image = (
         "soundfile",
         "librosa",
     )
+    .add_local_python_source("funasr_logits_infer")
 )
 
 app = modal.App(APP_NAME, image=image)
