@@ -6,20 +6,11 @@ from typing import Any
 
 import modal
 
-from asr_batch import (
-    append_jsonl,
-    atomic_write_json,
-    discover_audio_files,
-    error_record,
-    is_success_output,
-    normalize_asr_result,
-    output_path_for_audio,
-)
-
 APP_NAME = "vietmed-funasr-labeling"
 DATA_DIR = Path("data")
 ERROR_LOG = DATA_DIR / "_asr_errors.jsonl"
-MODEL_ID = "FunAudioLLM/Fun-ASR-Nano-2512"
+MODEL_ID = "FunAudioLLM/Fun-ASR-MLT-Nano-2512"
+LANGUAGE = "越南语"
 ALLOWED_REMOTE_SUFFIXES = {".wav", ".mp3", ".flac", ".m4a", ".ogg"}
 
 
@@ -45,7 +36,7 @@ image = (
 app = modal.App(APP_NAME, image=image)
 
 
-@app.cls(gpu="T4", timeout=60 * 30, scaledown_window=60 * 5)
+@app.cls(gpu="L4", timeout=60 * 30, scaledown_window=60 * 5)
 class FunASRWorker:
     @modal.enter()
     def load_model(self) -> None:
@@ -72,12 +63,23 @@ class FunASRWorker:
                 input=[tmp.name],
                 cache={},
                 batch_size=1,
+                language=LANGUAGE,
             )
         return result
 
 
 @app.local_entrypoint()
 def main(data_dir: str = str(DATA_DIR)) -> None:
+    from asr_batch import (
+        append_jsonl,
+        atomic_write_json,
+        discover_audio_files,
+        error_record,
+        is_success_output,
+        normalize_asr_result,
+        output_path_for_audio,
+    )
+
     root = Path(data_dir)
     root.mkdir(parents=True, exist_ok=True)
 
