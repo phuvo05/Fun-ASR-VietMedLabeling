@@ -1,7 +1,6 @@
 import ast
 from pathlib import Path
 
-
 TREE = ast.parse(Path("modal_funasr_infer.py").read_text(encoding="utf-8"))
 
 

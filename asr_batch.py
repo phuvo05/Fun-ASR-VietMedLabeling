@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 AUDIO_EXTENSIONS = {".wav", ".mp3", ".flac", ".m4a", ".ogg"}
-PUNCTUATION_TOKENS = set(".,!?;:，。！？；：、…")
+
 
 def discover_audio_files(data_dir: Path) -> list[Path]:
     if not data_dir.exists():
@@ -20,8 +20,14 @@ def discover_audio_files(data_dir: Path) -> list[Path]:
     return sorted(files, key=lambda path: str(path).lower())
 
 
-def output_path_for_audio(audio_path: Path) -> Path:
-    return audio_path.with_name(f"{audio_path.name}.json")
+def chunked(items: list[Any], batch_size: int) -> list[list[Any]]:
+    if batch_size < 1:
+        raise ValueError("batch_size must be at least 1")
+    return [items[index : index + batch_size] for index in range(0, len(items), batch_size)]
+
+
+def aggregate_output_path_for_audio(audio_path: Path, label_dir: Path) -> Path:
+    return label_dir / f"{audio_path.parent.name}.json"
 
 
 def is_success_output(output_path: Path, expected_audio_id: str) -> bool:
@@ -33,49 +39,62 @@ def is_success_output(output_path: Path, expected_audio_id: str) -> bool:
         return False
     if not isinstance(payload, list) or not payload:
         return False
-    item = payload[0]
-    if not isinstance(item, dict):
-        return False
+    return any(
+        _is_success_item(item, expected_audio_id)
+        for item in payload
+        if isinstance(item, dict)
+    )
+
+
+def _is_success_item(item: dict[str, Any], expected_audio_id: str) -> bool:
     if item.get("id") != expected_audio_id:
         return False
     if not isinstance(item.get("text"), str) or not item["text"].strip():
         return False
-    timestamps = item.get("timestamps")
-    if not isinstance(timestamps, list):
+    if "timestamps" not in item or not isinstance(item["timestamps"], list):
         return False
-
-    return _looks_like_word_level_timestamps(timestamps, item["text"])
-
-def _looks_like_word_level_timestamps(timestamps: list[Any], text: str) -> bool:
-    if not timestamps:
-        return False
-
-    # JSON cũ có field token => chắc chắn là token-level, không được skip.
-    if any(isinstance(timestamp, dict) and "token" in timestamp for timestamp in timestamps):
-        return False
-
-    text_word_count = len(text.split())
-
-    # Nếu timestamp nhiều hơn số word quá nhiều thì khả năng vẫn là token-level.
-    if text_word_count and len(timestamps) > max(text_word_count + 5, int(text_word_count * 1.25)):
-        return False
-
-    for timestamp in timestamps:
-        if not isinstance(timestamp, dict):
-            return False
-        if "word" not in timestamp:
-            return False
-        if "start" not in timestamp or "end" not in timestamp:
-            return False
-
     return True
 
 
 def normalize_asr_result(audio_id: str, raw_result: Any) -> list[dict[str, Any]]:
     item = _first_result_item(raw_result)
     text = str(item.get("text", "")).strip()
-    timestamps = _extract_timestamps(item, text=text)
+    timestamps = _extract_timestamps(item)
     return [{"id": audio_id, "text": text, "timestamps": timestamps}]
+
+
+def merge_result_into_aggregate(
+    output_path: Path,
+    result: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    existing = _read_aggregate_output(output_path)
+    if not result:
+        return existing
+
+    result_id = result[0].get("id")
+    merged = []
+    replaced = False
+    for item in existing:
+        if item.get("id") == result_id:
+            merged.extend(result)
+            replaced = True
+        else:
+            merged.append(item)
+    if not replaced:
+        merged.extend(result)
+    return merged
+
+
+def _read_aggregate_output(output_path: Path) -> list[dict[str, Any]]:
+    if not output_path.exists():
+        return []
+    try:
+        payload = json.loads(output_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    if not isinstance(payload, list):
+        return []
+    return [item for item in payload if isinstance(item, dict)]
 
 
 def _first_result_item(raw_result: Any) -> dict[str, Any]:
@@ -89,18 +108,16 @@ def _first_result_item(raw_result: Any) -> dict[str, Any]:
     return {"text": str(raw_result)}
 
 
-def _extract_timestamps(item: dict[str, Any], text: str = "") -> list[dict[str, Any]]:
+def _extract_timestamps(item: dict[str, Any]) -> list[dict[str, Any]]:
     timestamps = item.get("timestamps") or item.get("timestamp") or item.get("words")
     if not isinstance(timestamps, list):
         return []
 
-    # FunASR trả timestamp dạng token/subword.
-    # Cần gộp token trước khi lưu JSON.
-    if timestamps and all(
+    if all(
         isinstance(timestamp, dict) and _has_funasr_token_timestamp_fields(timestamp)
         for timestamp in timestamps
     ):
-        return _merge_funasr_token_timestamps(timestamps, text)
+        return _merge_funasr_token_timestamps(timestamps)
 
     normalized = []
     for timestamp in timestamps:
@@ -110,110 +127,87 @@ def _extract_timestamps(item: dict[str, Any], text: str = "") -> list[dict[str, 
             normalized.append({"start": timestamp[0], "end": timestamp[1]})
     return normalized
 
+
 def _merge_funasr_token_timestamps(
-    token_timestamps: list[dict[str, Any]],
-    transcript: str = "",
+    timestamps: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    token_groups = _group_token_timestamps_by_word(token_timestamps)
-    transcript_words = transcript.split() if transcript else []
+    words = []
+    current: dict[str, Any] | None = None
+    score_min: float | None = None
 
-    use_transcript_words = len(transcript_words) == len(token_groups)
-    word_timestamps: list[dict[str, Any]] = []
+    def flush_current() -> None:
+        nonlocal current, score_min
+        if current is None:
+            return
+        if score_min is not None:
+            current["confidence"] = round(score_min, 6)
+        words.append(current)
+        current = None
+        score_min = None
 
-    for index, group in enumerate(token_groups):
-        word = transcript_words[index] if use_transcript_words else _tokens_to_text(group)
-        word = word.strip()
-        if not word:
+    for timestamp in timestamps:
+        token = str(timestamp["token"])
+        word_piece = token.strip()
+        if not word_piece:
             continue
 
-        scores = [
-            _to_float(token.get("score"))
-            for token in group
-            if _to_float(token.get("score")) is not None
-        ]
-        confidence = round(sum(scores) / len(scores), 6) if scores else None
+        starts_new_word = token[:1].isspace()
+        is_punctuation = _is_punctuation_token(word_piece)
+        if starts_new_word or is_punctuation:
+            flush_current()
 
-        word_timestamps.append(
-            {
-                "word": word,
-                "start": _first_non_null(token.get("start_time") for token in group),
-                "end": _last_non_null(token.get("end_time") for token in group),
-                "confidence": confidence,
+        if current is None:
+            current = {
+                "word": word_piece,
+                "confidence": None,
+                "start": timestamp.get("start_time"),
+                "end": timestamp.get("end_time"),
             }
-        )
+        else:
+            current["word"] += word_piece
+            current["end"] = timestamp.get("end_time")
 
-    return word_timestamps
+        confidence = _timestamp_confidence(timestamp)
+        if confidence is not None:
+            score_min = confidence if score_min is None else min(score_min, confidence)
 
+        if is_punctuation:
+            flush_current()
 
-def _group_token_timestamps_by_word(
-    token_timestamps: list[dict[str, Any]],
-) -> list[list[dict[str, Any]]]:
-    groups: list[list[dict[str, Any]]] = []
-    current: list[dict[str, Any]] = []
-
-    for timestamp in token_timestamps:
-        token = str(timestamp.get("token", ""))
-        stripped = token.strip()
-        if not stripped:
-            continue
-
-        starts_new_word = token[:1].isspace() and not _is_punctuation_token(stripped)
-
-        if current and starts_new_word:
-            groups.append(current)
-            current = []
-
-        current.append(timestamp)
-
-    if current:
-        groups.append(current)
-
-    return groups
-
-
-def _tokens_to_text(group: list[dict[str, Any]]) -> str:
-    return "".join(str(token.get("token", "")) for token in group).strip()
+    flush_current()
+    return words
 
 
 def _normalize_timestamp_dict(timestamp: dict[str, Any]) -> dict[str, Any]:
     if _has_funasr_token_timestamp_fields(timestamp):
         return {
             "word": str(timestamp["token"]).strip(),
-            "confidence": timestamp.get("score"),
+            "confidence": _timestamp_confidence(timestamp),
             "start": timestamp.get("start_time"),
             "end": timestamp.get("end_time"),
         }
     return dict(timestamp)
 
 
-def _has_funasr_token_timestamp_fields(timestamp: dict[str, Any]) -> bool:
-    return "token" in timestamp and "start_time" in timestamp and "end_time" in timestamp
-
-
-def _is_punctuation_token(value: str) -> bool:
-    return bool(value) and all(char in PUNCTUATION_TOKENS for char in value)
-
-
-def _to_float(value: Any) -> float | None:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def _first_non_null(values: Any) -> Any:
-    for value in values:
-        if value is not None:
-            return value
+def _timestamp_confidence(timestamp: dict[str, Any]) -> float | None:
+    for key in ("token_confidence", "confidence", "score"):
+        value = timestamp.get(key)
+        if _is_usable_confidence(value):
+            return float(value)
     return None
 
 
-def _last_non_null(values: Any) -> Any:
-    last = None
-    for value in values:
-        if value is not None:
-            last = value
-    return last
+def _is_usable_confidence(score: Any) -> bool:
+    return isinstance(score, (int, float)) and float(score) > 0.0
+
+
+def _is_punctuation_token(token: str) -> bool:
+    return token in {".", ",", "?", "!", ":", ";", "…", "。", "，", "？", "！", "：", "；"}
+
+
+def _has_funasr_token_timestamp_fields(timestamp: dict[str, Any]) -> bool:
+    return "token" in timestamp and "start_time" in timestamp and "end_time" in timestamp
+
 
 def _is_timestamp_pair(value: Any) -> bool:
     return isinstance(value, (list, tuple)) and len(value) >= 2
