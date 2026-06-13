@@ -6,21 +6,21 @@ This repository runs pseudo-labeling for VietMed audio files with FunASR on Moda
 
 ## Workflow
 
-1. Put audio files in `data/`.
+1. Put audio files in a subfolder inside `data/` (e.g., `data/VietMed_unlabeled_000_050/`).
 2. Run the Modal batch command.
-3. Each successful audio file gets a JSON output next to it.
-4. Re-running the command skips files that already have successful output.
+3. Outputs are aggregated into a single JSON file per subfolder, saved in `data/label/<folder_name>.json`.
+4. Re-running the command skips audio files that already have valid entries in the aggregated JSON file.
 
 Example input:
 
 ```text
-data/VietMed_un_001_s05OFV.wav
+data/VietMed_unlabeled_000_050/VietMed_un_001_s05OFV.wav
 ```
 
 Example output:
 
 ```text
-data/VietMed_un_001_s05OFV.wav.json
+data/label/VietMed_unlabeled_000_050.json
 ```
 
 Output JSON format:
@@ -78,9 +78,9 @@ modal run modal_funasr_infer.py --batch-size 5
 
 ## Resume behavior
 
-A file is skipped when its output JSON exists, parses correctly, has matching `id`, has non-empty `text`, and contains a `timestamps` list.
+A file is skipped when its entry exists in the aggregated output JSON, parses correctly, has a matching `id`, has non-empty `text`, and contains a `timestamps` list.
 
-Invalid or partial output files are re-run.
+Invalid or partial outputs will cause those specific files to be re-run.
 
 Failures are appended to `_asr_errors.jsonl` inside the selected data folder. With the default folder, that path is:
 
