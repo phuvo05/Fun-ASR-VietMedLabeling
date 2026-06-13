@@ -1,5 +1,7 @@
 # VietMed FunASR Modal Labeling
 
+**Repository:** [https://github.com/phuvo05/Fun-ASR-VietMedLabeling](https://github.com/phuvo05/Fun-ASR-VietMedLabeling)
+
 This repository runs pseudo-labeling for VietMed audio files with FunASR on Modal.com.
 
 ## Workflow
@@ -66,6 +68,12 @@ Use a custom data folder:
 
 ```powershell
 modal run modal_funasr_infer.py --data-dir "D:\path\to\audio_data"
+```
+
+Use a custom batch size:
+
+```powershell
+modal run modal_funasr_infer.py --batch-size 5
 ```
 
 ## Resume behavior
