@@ -153,7 +153,10 @@ def _merge_funasr_token_timestamps(
 
         starts_new_word = token[:1].isspace()
         is_punctuation = _is_punctuation_token(word_piece)
-        if starts_new_word or is_punctuation:
+        if is_punctuation:
+            flush_current()
+            continue
+        if starts_new_word:
             flush_current()
 
         if current is None:
@@ -170,9 +173,6 @@ def _merge_funasr_token_timestamps(
         confidence = _timestamp_confidence(timestamp)
         if confidence is not None:
             score_min = confidence if score_min is None else min(score_min, confidence)
-
-        if is_punctuation:
-            flush_current()
 
     flush_current()
     return words
