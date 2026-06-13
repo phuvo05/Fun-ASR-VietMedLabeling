@@ -4,6 +4,8 @@ from pathlib import Path
 import torch
 
 from funasr_logits_infer import (
+    _generated_token_confidences,
+    _timestamp_confidences_from_generated_tokens,
     _token_confidences_from_ctc_log_probs,
     describe_model_for_logits,
     describe_nested_model_for_logits,
@@ -40,6 +42,12 @@ class FakeCtcInnerModel:
     ctc_tokenizer = FakeCtcTokenizer()
 
 
+class FakeLlmTokenizer:
+    def decode(self, token_ids, **kwargs):
+        pieces = {10: "xin", 11: " ch", 12: "ào"}
+        return "".join(pieces[token_id] for token_id in token_ids)
+
+
 class FakeInnerModel:
     def inference(self):
         return None
@@ -70,6 +78,52 @@ def test_describe_nested_model_for_logits_includes_inner_model_and_signatures():
     assert "forward" in description["inner_signatures"]
     assert "inference" in description["inner_signatures"]
     assert description["kwargs_keys"] == ["model"]
+
+
+def test_generated_token_confidences_uses_softmax_of_chosen_llm_logits():
+    scores = [
+        torch.log(torch.tensor([[0.01, 0.90, 0.09]])),
+        torch.log(torch.tensor([[0.20, 0.30, 0.50]])),
+    ]
+    sequences = torch.tensor([[1, 2]])
+
+    token_ids, confidences = _generated_token_confidences(sequences, scores)
+
+    assert token_ids == [1, 2]
+    assert confidences == [0.9, 0.5]
+
+
+
+def test_timestamp_confidences_from_generated_tokens_maps_llm_scores_to_timestamps():
+    timestamps = [{"token": "xin"}, {"token": " chào"}]
+    token_ids = [10, 11, 12]
+    token_confidences = [0.91, 0.83, 0.72]
+
+    confidences = _timestamp_confidences_from_generated_tokens(
+        FakeLlmTokenizer(),
+        timestamps,
+        token_ids,
+        token_confidences,
+    )
+
+    assert confidences == [0.91, 0.72]
+
+
+
+def test_timestamp_confidences_from_generated_tokens_falls_back_by_word_order_for_bad_ctc_text():
+    timestamps = [{"token": "�"}, {"token": "�"}, {"token": "ng"}, {"token": " miễn"}]
+    token_ids = [10, 11, 12]
+    token_confidences = [0.91, 0.83, 0.72]
+
+    confidences = _timestamp_confidences_from_generated_tokens(
+        FakeLlmTokenizer(),
+        timestamps,
+        token_ids,
+        token_confidences,
+    )
+
+    assert confidences == [0.91, 0.91, 0.91, 0.72]
+
 
 
 def test_token_confidences_from_ctc_log_probs_aligns_timestamp_tokens():
@@ -113,6 +167,32 @@ def test_token_confidences_from_ctc_log_probs_keeps_positions_for_unmatched_toke
     )
 
     assert confidences == [None, 0.9, 0.85]
+
+
+
+def test_token_confidences_from_ctc_log_probs_falls_back_when_alignment_misses():
+    log_probs = torch.log(
+        torch.tensor(
+            [
+                [0.05, 0.90, 0.05],
+                [0.05, 0.80, 0.15],
+                [0.05, 0.10, 0.85],
+                [0.05, 0.15, 0.80],
+            ]
+        )
+    )
+    timestamps = [
+        {"token": "xin", "start_time": 0.0, "end_time": 0.5},
+        {"token": " xin", "start_time": 0.5, "end_time": 1.0},
+    ]
+
+    confidences = _token_confidences_from_ctc_log_probs(
+        FakeCtcInnerModel(),
+        log_probs,
+        timestamps,
+    )
+
+    assert confidences == [0.9, 0.85]
 
 
 

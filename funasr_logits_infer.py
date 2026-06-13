@@ -67,6 +67,23 @@ def _try_extract_funasr_ctc_confidences(
         return None
 
     def wrapped_inference_llm(self: Any, data_in: Any, data_lengths: Any = None, key: list | None = None, tokenizer: Any = None, frontend: Any = None, **kwargs: Any) -> Any:
+        result_holder["tokenizer"] = tokenizer
+        original_llm_generate = getattr(getattr(self, "llm", None), "generate", None)
+
+        def wrapped_llm_generate(*generate_args: Any, **generate_kwargs: Any) -> Any:
+            generate_kwargs = dict(generate_kwargs)
+            generate_kwargs["output_scores"] = True
+            generate_kwargs["return_dict_in_generate"] = True
+            output = original_llm_generate(*generate_args, **generate_kwargs)
+            sequences = getattr(output, "sequences", None)
+            scores = getattr(output, "scores", None)
+            if sequences is not None and scores is not None:
+                result_holder["llm_token_ids"], result_holder["llm_token_confidences"] = (
+                    _generated_token_confidences(sequences, list(scores))
+                )
+                return sequences
+            return output
+
         try:
             result_holder["ctc_log_probs"] = _extract_ctc_log_probs_from_inference(
                 self,
@@ -79,14 +96,21 @@ def _try_extract_funasr_ctc_confidences(
             )
         except Exception:
             result_holder["ctc_log_probs"] = None
-        return original_inference_llm(
-            data_in,
-            data_lengths=data_lengths,
-            key=key,
-            tokenizer=tokenizer,
-            frontend=frontend,
-            **kwargs,
-        )
+
+        if callable(original_llm_generate):
+            self.llm.generate = wrapped_llm_generate
+        try:
+            return original_inference_llm(
+                data_in,
+                data_lengths=data_lengths,
+                key=key,
+                tokenizer=tokenizer,
+                frontend=frontend,
+                **kwargs,
+            )
+        finally:
+            if callable(original_llm_generate):
+                self.llm.generate = original_llm_generate
 
     try:
         inner_model.inference_llm = types.MethodType(wrapped_inference_llm, inner_model)
@@ -110,6 +134,19 @@ def _try_extract_funasr_ctc_confidences(
     timestamps = item.get("timestamps") or item.get("timestamp") or item.get("words")
     if not isinstance(timestamps, list):
         return None
+    llm_token_ids = result_holder.get("llm_token_ids")
+    llm_token_confidences = result_holder.get("llm_token_confidences")
+    tokenizer = result_holder.get("tokenizer")
+    if tokenizer is not None and llm_token_ids and llm_token_confidences:
+        confidences = _timestamp_confidences_from_generated_tokens(
+            tokenizer,
+            timestamps,
+            llm_token_ids,
+            llm_token_confidences,
+        )
+        if confidences:
+            return confidences
+
     ctc_log_probs = result_holder.get("ctc_log_probs")
     if ctc_log_probs is None:
         return None
@@ -126,6 +163,109 @@ def _extract_ctc_log_probs_from_inference(inner_model: Any, data_in: Any, **kwar
     decoder_out, _decoder_out_lens = inner_model.ctc_decoder(encoder_out, encoder_out_lens)
     ctc_logits = inner_model.ctc.log_softmax(decoder_out)
     return ctc_logits[0, : encoder_out_lens[0].item(), :]
+
+
+def _generated_token_confidences(sequences: Any, scores: list[Any]) -> tuple[list[int], list[float]]:
+    if not scores:
+        return [], []
+    generated_count = len(scores)
+    sequence = sequences[0]
+    generated_ids = sequence[-generated_count:]
+    token_ids = []
+    confidences = []
+    for token_id_tensor, score in zip(generated_ids, scores):
+        token_id = int(token_id_tensor.item())
+        probability = score[0].softmax(dim=-1)[token_id]
+        token_ids.append(token_id)
+        confidences.append(round(float(probability.item()), 6))
+    return token_ids, confidences
+
+
+
+def _timestamp_confidences_from_generated_tokens(
+    tokenizer: Any,
+    timestamps: list[dict[str, Any]],
+    token_ids: list[int],
+    token_confidences: list[float],
+) -> list[float] | None:
+    pieces = []
+    for token_id, confidence in zip(token_ids, token_confidences):
+        try:
+            text = tokenizer.decode([token_id], skip_special_tokens=True)
+        except TypeError:
+            text = tokenizer.decode([token_id])
+        except Exception:
+            text = ""
+        if text:
+            pieces.append((text, float(confidence)))
+
+    cursor = 0
+    confidences = []
+    for timestamp in timestamps:
+        if not isinstance(timestamp, dict) or "token" not in timestamp:
+            continue
+        target = _clean_piece_for_ctc(str(timestamp["token"])).replace(" ", "")
+        if not target:
+            confidences.append(None)
+            continue
+        combined = ""
+        span_scores = []
+        while cursor < len(pieces) and target not in combined.replace(" ", ""):
+            piece, confidence = pieces[cursor]
+            combined += piece
+            span_scores.append(confidence)
+            cursor += 1
+        if target in combined.replace(" ", "") and span_scores:
+            confidences.append(round(min(span_scores), 6))
+        else:
+            confidences.append(None)
+
+    fallback = _timestamp_confidences_by_generated_word_order(timestamps, pieces)
+    if any("�" in str(timestamp.get("token", "")) for timestamp in timestamps if isinstance(timestamp, dict)):
+        return fallback
+    if any(confidence is not None for confidence in confidences):
+        return confidences
+    return fallback
+
+
+
+def _timestamp_confidences_by_generated_word_order(
+    timestamps: list[dict[str, Any]],
+    pieces: list[tuple[str, float]],
+) -> list[float] | None:
+    word_confidences = []
+    current_scores = []
+    for piece, confidence in pieces:
+        if piece[:1].isspace() and current_scores:
+            word_confidences.append(round(min(current_scores), 6))
+            current_scores = []
+        stripped = piece.strip()
+        if stripped and not _is_punctuation_text(stripped):
+            current_scores.append(confidence)
+    if current_scores:
+        word_confidences.append(round(min(current_scores), 6))
+
+    word_index = 0
+    confidences = []
+    for timestamp in timestamps:
+        if not isinstance(timestamp, dict) or "token" not in timestamp:
+            continue
+        token = str(timestamp["token"])
+        stripped = token.strip()
+        if not stripped or ("�" not in stripped and _is_punctuation_text(stripped)):
+            confidences.append(None)
+            continue
+        if token[:1].isspace() and confidences:
+            word_index += 1
+        confidence = word_confidences[word_index] if word_index < len(word_confidences) else None
+        confidences.append(confidence)
+    return confidences if any(confidence is not None for confidence in confidences) else None
+
+
+
+def _is_punctuation_text(text: str) -> bool:
+    return bool(re.fullmatch(r"[^\w\s]+", text, flags=re.UNICODE))
+
 
 
 def _token_confidences_from_ctc_log_probs(
@@ -158,7 +298,7 @@ def _token_confidences_from_ctc_log_probs(
             piece_scores.append(float(frame_scores[frame_index, piece_id].item()))
             next_cursor = match_index + 1
         if not matched or not piece_scores:
-            confidences.append(None)
+            confidences.append(window_confidences[timestamp_index])
             continue
         cursor = next_cursor
         confidences.append(round(min(piece_scores), 6))
