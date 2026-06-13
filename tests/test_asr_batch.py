@@ -234,7 +234,27 @@ def test_normalize_asr_result_merges_funasr_subword_tokens_to_words():
         {"word": "Hợp", "confidence": 0.6, "start": 0.0, "end": 0.3},
         {"word": "hoạt", "confidence": 0.7, "start": 0.3, "end": 0.5},
         {"word": "động", "confidence": 0.5, "start": 0.5, "end": 0.8},
-        {"word": ".", "confidence": 1.0, "start": 0.8, "end": 0.9},
+    ]
+
+
+
+def test_normalize_asr_result_does_not_emit_punctuation_as_words():
+    raw = {
+        "text": "đặc hiệu là",
+        "timestamps": [
+            {"token": "đặc", "token_confidence": 0.8, "start_time": 2.64, "end_time": 2.76},
+            {"token": " hiệu", "token_confidence": 0.7, "start_time": 2.76, "end_time": 2.82},
+            {"token": ",", "token_confidence": 0.6, "start_time": 2.82, "end_time": 2.88},
+            {"token": " là", "token_confidence": 0.9, "start_time": 2.88, "end_time": 3.0},
+        ],
+    }
+
+    normalized = normalize_asr_result("sample.wav", raw)
+
+    assert normalized[0]["timestamps"] == [
+        {"word": "đặc", "confidence": 0.8, "start": 2.64, "end": 2.76},
+        {"word": "hiệu", "confidence": 0.7, "start": 2.76, "end": 2.82},
+        {"word": "là", "confidence": 0.9, "start": 2.88, "end": 3.0},
     ]
 
 
